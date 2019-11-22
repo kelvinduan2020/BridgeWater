@@ -1,0 +1,18 @@
+Needs python 3.x
+
+Install modules:
+pip install behave getpass yaml hvac psutil 
+
+Run tests with behave (not implemented)
+
+Processes:
+---------
+orch: Process called by cron to tell the daemon to run a program
+
+orchd: Daemon process that connects to the vault at startup and maintains that
+connection. Orchd reads the credentials to connect to the vault at startup time.
+This prevents it being stored on disk.
+
+orchestrate.yaml: Configuration file read by orchd. This includes primarily the
+configuration information for each command that should be run.
+

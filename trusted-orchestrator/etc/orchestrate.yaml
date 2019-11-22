@@ -1,0 +1,29 @@
+# Address for the vault
+#vault: 'https://localhost:8200'
+vault: 'http://localhost:8200'
+
+# Included in case it's required, but it's recommended not to use this. The
+# vault password should be typed in at startup to prevent it being ever stored
+# on accesible media where it could be read
+#vaultpw: s.0x3DZT6EMJQ1lotCiFrkWufT
+vaultpw: s.As6T2wREPFgeCs18LhX6gBMK
+
+commands:
+  - name: loader
+    exec: /home/tradegen/bin/tradegen run dataload
+    secrets:
+      - bloomberg
+      - database
+  - name: cleaner
+    exec: /home/tradegen/bin/tradegen run cleanup
+    secrets: 
+      - database
+
+secrets:
+  - name: database
+    type: kv
+    value: yyyyy
+  - name: bloomberg
+    type: kv
+    value: xxxxx
+

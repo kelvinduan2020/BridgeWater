@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+# -------------------------------------------------------------------------------
+# imports
+# -------------------------------------------------------------------------------
+import os
+import sys
+import argparse
+import logging
+import getpass
+import yaml  # pip install pyyaml
+import hvac  # pip install hvac
+import zmq   # pip install pyzmq
+
+
+# from daemons.prefab import run
+
+# -------------------------------------------------------------------------------
+# parse the command line and build the running configuration
+# -------------------------------------------------------------------------------
+def parse_cli():
+    config = dict()
+    config['DIR'] = os.path.normpath(os.path.dirname(os.path.dirname(os.path.abspath(os.path.realpath(__file__)))))
+    config['CONF'] = config['DIR'] + "/etc/orchestrate.yaml"
+    config['LOG'] = config['DIR'] + "/log/orchd.log"
+    config['PORT'] = 8899
+    config['COMMANDS'] = "shutdown loader cleanup"
+
+    parser = argparse.ArgumentParser(description='Orchestrate the autonomous secure operation of tradegen processes')
+    parser.add_argument('-v', '--verbose', action="store_true", help="enable verbose mode")
+    parser.add_argument('-d', '--debug', action="store_true", help="enable debug mode")
+    parser.add_argument('-n', '--noaction', action="store_true", help="print what would be done without actually doing it. Implies -f")
+    parser.add_argument('-f', '--foreground', action="store_false", help="Stay in the foreground")
+    parser.add_argument('-o', '--conf', help="Specify a config file. By default {}".format(config['CONF']))
+    parser.add_argument('-l', '--log',  help="Specify the log file to use. By default {}".format(config['LOG']))
+    parser.add_argument('-p', '--port', default=config['PORT'], type=int,
+                        help="Specify the port number for communication channel(socket). By default".format(config['PORT']))
+    parser.add_argument('-c', '--commands', default=config['COMMANDS'], type=str,
+                        help="Space separated commands that will be accepted by this program. By default '{}'.".format(config["COMMANDS"]))
+
+    args = parser.parse_args()
+
+    if args.conf:
+        config['CONF'] = "{}/args.conf".format(config['DIR'])
+    if args.log:
+        config['LOG'] = args.log
+    if args.verbose:
+        config['LOGLEVEL'] = logging.INFO
+    if args.debug:
+        config['LOGLEVEL'] = logging.DEBUG
+
+    # merge with values from the config file. Command-line values override anything
+    # in the config file
+    config = load_conf(config)
+
+    # set default loglevel if it hasn't been configured anywhere else
+    if 'LOGLEVEL' not in config:
+        config['LOGLEVEL'] = logging.WARNING
+
+    return config
+
+
+# -------------------------------------------------------------------------------
+# Open the logfile
+# -------------------------------------------------------------------------------
+def setup_logging(config):
+    try:
+        logging.basicConfig(format='%(asctime)s %(message)s', filename=config['LOG'], level=config['LOGLEVEL'])
+        logging.info("Process startup")
+
+    except FileNotFoundError:
+        print("Can't open log file or directory for writing: ", config['LOG'])
+        sys.exit(1)
+
+
+# -------------------------------------------------------------------------------
+# read configuration file containing job syntax
+# -------------------------------------------------------------------------------
+def load_conf(config):
+    cfg_file = {}
+    try:
+        with open(config['CONF'], 'r') as stream:
+            cfg_file = yaml.safe_load(stream)
+        stream.close()
+
+    except FileNotFoundError:
+        print("No such file as:", config['CONF'])
+    except yaml.YAMLError:
+        print("error parsing configuration file", config['CONF'])
+    except:
+        print("unknown issue occurred when trying to open or read configuration",
+              config['CONF'])
+
+    cfg_file.update(config)
+
+    return cfg_file
+
+
+# -------------------------------------------------------------------------------
+# read in the vault password
+# -------------------------------------------------------------------------------
+def read_vault_token():
+    if sys.stdin.isatty():
+        vault_token = getpass.getpass(prompt="Enter the Vault Token: ")
+    else:
+        vault_token = sys.stdin.readline().rstrip()
+
+    logging.debug("Read vault token from environment")
+
+    return vault_token
+
+
+# -------------------------------------------------------------------------------
+# connect to the vault
+# -------------------------------------------------------------------------------
+def vault_connect(config):
+    logging.info("establishing vault connection")
+
+    client = hvac.Client(url=config['vault'], token=config['vaultpw'])
+    # client.token = config['vaultpw']
+
+    return client
+
+
+# -------------------------------------------------------------------------------
+# subscribe to messages
+# -------------------------------------------------------------------------------
+def subscribe(config):
+    port = config['PORT']
+
+    context = zmq.Context()
+    socket = context.socket(zmq.SUB)
+    socket.connect("tcp://localhost:{}".format(port))
+
+    filters = config['COMMANDS']
+    for f in filters:
+        socket.setsockopt_string(zmq.SUBSCRIBE, f)
+
+    logging.info("Subscribe to port {} with commands: {}".format(port, filters))
+    return socket
+
+# -------------------------------------------------------------------------------
+# parse commands from the socket
+# available commands:
+#   shutdown - shut down the process
+#   run command_name - run a command from the list in the config file
+# -------------------------------------------------------------------------------
+
+
+def parse_cmd(msg):
+    logging.debug("received command: %s", msg)
+    if msg.lower() == 'shutdown':
+        stop = True
+    else:
+        stop = False
+
+    return stop
+
+# -------------------------------------------------------------------------------
+# Run command
+# -------------------------------------------------------------------------------
+def run_cmd(cmd):
+    #logging.info("Starting command '%s'", cmd)
+    print("Starting command '%s'", cmd)
+
+    os.environ['BLOOMBERG'] = ''
+    os.environ['DATABASE'] = ''
+
+    # fetch the latest secret(s) from the vault
+    # Set up the environment
+    if cmd == "loader":
+        os.environ['BLOOMBERG'] = credential_for_bloomberg()
+        os.environ['DATABASE'] = credential_for_database()
+    elif cmd == "cleaner":
+        os.environ['DATABASE'] = credential_for_database()
+    else:
+        print("Please type one of these commands: shutdown loader cleaner")
+
+    print(os.environ['BLOOMBERG'])
+    print(os.environ['DATABASE'])
+    # fork and exec subprocess
+    # subprocess.call(cmd)
+
+def credential_for_bloomberg():
+    data = vault.read("secret/data/bloomberg")
+    return data['data']['data']['password']
+
+def credential_for_database():
+    data = vault.read("secret/data/database")
+    return data['data']['data']['password']
+
+# -------------------------------------------------------------------------------
+# Main loop.
+# -------------------------------------------------------------------------------
+def run(subscriber, vault):
+    stop = False
+    while not stop:
+        command = subscriber.recv_string()
+        logging.debug("received command: {}".format(command))
+        print("received command: {}".format(command))
+
+        stop = parse_cmd(command)
+        if not stop:
+            run_cmd(command)
+
+
+# ------------------------------------------------------------------------------
+# main program
+# -------------------------------------------------------------------------------
+if __name__ == '__main__':
+    cfg = parse_cli()
+    setup_logging(cfg)
+
+    # if 'vaultpw' not in cfg:
+    #     cfg['vaultpw'] = read_vault_token()
+    #     logging.debug("read vault token from environment")
+    # else:
+    #     logging.debug("using vault token from configuration file: %s - DO NOT DO THIS IN PRODUCTION", cfg['CONF'])
+
+    # prepare to receive commands (just create the channel)
+    subscriber = subscribe(cfg)
+
+    # Connect to the vault
+    vault = vault_connect(cfg)
+
+    # start the main loop
+    run(subscriber, vault)
+
+    # Close the vault, do any other cleanup here
+    vault.adapter.close()
