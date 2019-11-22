@@ -6,7 +6,8 @@ vault: 'http://localhost:8200'
 # vault password should be typed in at startup to prevent it being ever stored
 # on accesible media where it could be read
 #vaultpw: s.0x3DZT6EMJQ1lotCiFrkWufT
-vaultpw: s.As6T2wREPFgeCs18LhX6gBMK
+#vaultpw: s.As6T2wREPFgeCs18LhX6gBMK
+#vaultpw: ''
 
 commands:
   - name: loader
